@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Telegram 通知模块
-通过 Bot API 发送消息
+Telegram 通知模块 - V1.1.0
 """
 
 import requests
@@ -9,10 +8,6 @@ import config
 from typing import Dict
 
 def send_telegram_message(text: str) -> bool:
-    """
-    发送消息到 Telegram
-    返回是否发送成功
-    """
     if not config.TELEGRAM_ENABLE:
         print("ℹ️ Telegram 通知已禁用，消息未发送")
         return False
@@ -42,22 +37,27 @@ def send_telegram_message(text: str) -> bool:
 def format_notification(item: Dict, price_changed: bool = False) -> str:
     """
     格式化通知消息
-    item 应包含: platform, name, price, url, time
+    如果 item 包含 test_mode=True，自动添加测试标记
     """
     platform = item.get("platform", "未知平台")
     name = item.get("name", "未知型号")
     price = item.get("price", "未知价格")
     url = item.get("url", "")
     time = item.get("time", "")
+    is_test = item.get("test_mode", False)
 
-    lines = [
-        "🚨 <b>iPhone 价格提醒</b>",
-        "",
-        f"📱 型号：{name}",
-        f"💰 价格：{price}",
-        f"🏷️ 来源：{platform}",
-        f"🕒 发现时间：{time}",
-    ]
+    lines = []
+
+    if is_test:
+        lines.append("🧪 <b>测试数据源 - iPhone 价格提醒</b>")
+    else:
+        lines.append("🚨 <b>iPhone 价格提醒</b>")
+
+    lines.append("")
+    lines.append(f"📱 型号：{name}")
+    lines.append(f"💰 价格：{price}")
+    lines.append(f"🏷️ 来源：{platform}")
+    lines.append(f"🕒 发现时间：{time}")
 
     if price_changed:
         lines.append("📉 状态：价格下降！")
