@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Apple 官方翻新商城数据获取 - V1.1.0
-支持多地区（US/CN/JP/HK），当前以 US 为测试源
+Apple 官方翻新商城数据获取 - V1.1.1
+改用 JSON 解析方案（适配当前 Apple 页面结构）
 """
 
 import requests
-from bs4 import BeautifulSoup
+import re
+import json
 from datetime import datetime
 from typing import List, Dict
-import re
 import config
 
 def _get_apple_domain(region: str) -> str:
@@ -31,36 +31,82 @@ def _get_apple_refurb_url(region: str) -> str:
         return "https://www.apple.com/jp/shop/refurbished/iphone"
     return "https://www.apple.com/shop/refurbished/iphone"
 
-def _parse_product_from_markdown(text: str, domain: str, region: str) -> List[Dict]:
-    """解析 Apple 美国站 Markdown 风格的 ### 商品标题"""
+def _parse_initial_state(html: str) -> List[Dict]:
+    """解析 __INITIAL_STATE__ JSON"""
+    pattern = r'window\.__INITIAL_STATE__\s*=\s*({.*?});'
+    match = re.search(pattern, html, re.DOTALL)
+    if not match:
+        return []
+    try:
+        data = json.loads(match.group(1))
+        products = data.get("products", [])
+        if not products:
+            products = data.get("refurbished", {}).get("products", [])
+        return products
+    except json.JSONDecodeError:
+        return []
+
+def _parse_next_data(html: str) -> List[Dict]:
+    """解析 __NEXT_DATA__ JSON（Next.js 页面备用）"""
+    pattern = r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>'
+    match = re.search(pattern, html, re.DOTALL)
+    if not match:
+        return []
+    try:
+        data = json.loads(match.group(1))
+        # 遍历查找商品数据
+        def find_products(obj):
+            if isinstance(obj, dict):
+                if "products" in obj and isinstance(obj["products"], list):
+                    return obj["products"]
+                for value in obj.values():
+                    result = find_products(value)
+                    if result:
+                        return result
+            elif isinstance(obj, list):
+                for item in obj:
+                    result = find_products(item)
+                    if result:
+                        return result
+            return None
+
+        products = find_products(data)
+        return products if products else []
+    except json.JSONDecodeError:
+        return []
+
+def _extract_products_from_json(prod_list: List[Dict], domain: str, region: str) -> List[Dict]:
+    """从 JSON 商品列表中提取统一格式"""
     products = []
-    blocks = re.split(r'###\s*', text)
-
-    for block in blocks:
-        if not block.strip():
-            continue
+    for prod in prod_list:
         try:
-            name_match = re.search(r'\[(.*?)\]', block)
-            if not name_match:
-                continue
-            name = name_match.group(1).strip()
-
-            if "..." in name:
+            name = prod.get("productTitle", "") or prod.get("title", "")
+            if not name:
                 continue
 
-            url_match = re.search(r'\((https?://[^\)]+)\)', block)
-            if not url_match:
-                continue
-            url = url_match.group(1)
+            price_info = prod.get("price", {})
+            price_amount = price_info.get("amount", "0")
+            currency = price_info.get("currency", "USD")
+
+            if currency == "CNY":
+                symbol = "¥"
+            elif currency == "USD":
+                symbol = "$"
+            elif currency == "HKD":
+                symbol = "HK$"
+            else:
+                symbol = "$"
+
+            try:
+                price_value = float(price_amount)
+                price = f"{symbol}{int(price_value):,}" if price_value.is_integer() else f"{symbol}{price_value:,.2f}"
+            except (ValueError, TypeError):
+                price = f"{symbol}{price_amount}"
+
+            url = prod.get("url", "")
             if url and not url.startswith("http"):
                 url = domain + url
 
-            price_match = re.search(r'Now\s*\$([\d,]+(?:\.\d{2})?)', block)
-            if not price_match:
-                continue
-            price_value = float(price_match.group(1).replace(',', ''))
-            price = f"${int(price_value):,}" if price_value.is_integer() else f"${price_value:,.2f}"
-
             capacity_match = re.search(r'(\d+GB)', name)
             capacity = capacity_match.group(1) if capacity_match else ""
 
@@ -80,85 +126,12 @@ def _parse_product_from_markdown(text: str, domain: str, region: str) -> List[Di
                 "test_mode": config.TEST_MODE,
             })
         except Exception as e:
-            print(f"⚠️ Apple Markdown解析单个商品出错: {e}")
+            print(f"⚠️ Apple JSON解析单个商品出错: {e}")
             continue
-
-    return products
-
-def _parse_product_from_html(html: str, domain: str, region: str) -> List[Dict]:
-    """HTML 备用解析，当 Markdown 解析失败或不完整时使用"""
-    products = []
-    soup = BeautifulSoup(html, "lxml")
-
-    items = soup.select(".product-item")
-    if not items:
-        items = soup.select(".rf-refurbished-product")
-    if not items:
-        items = soup.select("[data-product-id]")
-    if not items:
-        items = soup.select(".product-card")
-
-    for item in items:
-        try:
-            name_elem = item.select_one(".product-title") or item.select_one(".title") or item.select_one("h3")
-            if not name_elem:
-                continue
-            name = name_elem.get_text(strip=True)
-
-            price_elem = item.select_one(".price") or item.select_one(".product-price") or item.select_one(".amount")
-            if not price_elem:
-                continue
-            price_text = price_elem.get_text(strip=True)
-            price_clean = re.sub(r'[^\d.]', '', price_text)
-            if price_clean:
-                try:
-                    price_value = float(price_clean)
-                    price = f"${int(price_value):,}" if price_value.is_integer() else f"${price_value:,.2f}"
-                except ValueError:
-                    price = f"${price_text}"
-            else:
-                price = f"${price_text}"
-
-            url_elem = item.select_one("a")
-            url = ""
-            if url_elem:
-                href = url_elem.get("href")
-                if href:
-                    if href.startswith("//"):
-                        url = "https:" + href
-                    elif href.startswith("/"):
-                        url = domain + href
-                    elif not href.startswith("http"):
-                        url = domain + "/" + href.lstrip("/")
-                    else:
-                        url = href
-
-            capacity_match = re.search(r'(\d+GB)', name)
-            capacity = capacity_match.group(1) if capacity_match else ""
-
-            platform_name = "Apple官方翻新"
-            if config.TEST_MODE:
-                platform_name = "🧪 Apple官方翻新(测试)"
-
-            products.append({
-                "platform": platform_name,
-                "name": name,
-                "price": price,
-                "url": url,
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "capacity": capacity,
-                "description": name,
-                "region": region,
-                "test_mode": config.TEST_MODE,
-            })
-        except Exception as e:
-            print(f"⚠️ Apple HTML解析单个商品出错: {e}")
-            continue
-
     return products
 
 def fetch_apple_products() -> List[Dict]:
-    """获取 Apple 官翻 iPhone 商品列表（支持多地区）"""
+    """获取 Apple 官翻 iPhone 商品列表"""
     all_products = []
     regions = getattr(config, "APPLE_REGIONS", ["US"])
 
@@ -181,20 +154,27 @@ def fetch_apple_products() -> List[Dict]:
             print(f"⚠️ Apple {region.upper()} 网络请求失败: {e}")
             continue
 
-        # 1. 先尝试 Markdown 解析
-        soup = BeautifulSoup(html, "lxml")
-        page_text = soup.get_text()
-        products = _parse_product_from_markdown(page_text, domain, region)
+        # 1. 尝试 __INITIAL_STATE__ 解析
+        prod_list = _parse_initial_state(html)
+        if prod_list:
+            print(f"✅ Apple {region.upper()} 使用 __INITIAL_STATE__ 解析成功")
+            products = _extract_products_from_json(prod_list, domain, region)
+            if products:
+                print(f"✅ Apple {region.upper()} 抓取到 {len(products)} 个商品")
+                all_products.extend(products)
+                continue
 
-        # 2. 如果 Markdown 解析结果为空，尝试 HTML 解析
-        if not products:
-            print(f"ℹ️ Apple {region.upper()} Markdown解析无结果，尝试HTML解析...")
-            products = _parse_product_from_html(html, domain, region)
+        # 2. 尝试 __NEXT_DATA__ 解析
+        prod_list = _parse_next_data(html)
+        if prod_list:
+            print(f"✅ Apple {region.upper()} 使用 __NEXT_DATA__ 解析成功")
+            products = _extract_products_from_json(prod_list, domain, region)
+            if products:
+                print(f"✅ Apple {region.upper()} 抓取到 {len(products)} 个商品")
+                all_products.extend(products)
+                continue
 
-        if products:
-            print(f"✅ Apple {region.upper()} 抓取到 {len(products)} 个商品")
-            all_products.extend(products)
-        else:
-            print(f"ℹ️ Apple {region.upper()} 未找到商品")
+        print(f"ℹ️ Apple {region.upper()} 未找到商品数据")
 
     return all_products
+            
