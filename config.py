@@ -33,7 +33,7 @@ STATUS_PREFERENCE: List[str] = []
 TELEGRAM_ENABLE: bool = True
 
 # ---------- Apple 官翻地区 ----------
-APPLE_REGION: str = "CN"
+APPLE_REGION: str = "US"
 
 # ---------- 从环境变量读取敏感信息 ----------
 TELEGRAM_BOT_TOKEN: Optional[str] = os.getenv("TELEGRAM_BOT_TOKEN")
