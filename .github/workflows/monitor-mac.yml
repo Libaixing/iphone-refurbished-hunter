@@ -1,3 +1,4 @@
+# Re-push 2026-10-27 to re-register cron schedule (scheduled runs never fired after creation).
 name: MacBook Air Refurb Hunter
 
 on:
