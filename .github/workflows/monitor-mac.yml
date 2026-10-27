@@ -3,16 +3,20 @@ name: MacBook Air Refurb Hunter
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "7 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: monitor-mac
+  cancel-in-progress: false
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 60
 
     steps:
       - name: Checkout code
@@ -28,11 +32,16 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Mac hunter
+      - name: Run Mac hunter (loop 50 min, check every 10 min)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python -m mac.main
+        run: |
+          for i in 1 2 3 4 5; do
+            echo "=== check $i/5 ==="
+            python -m mac.main || true
+            if [ $i -lt 5 ]; then sleep 600; fi
+          done
 
       - name: Save state
         run: |
